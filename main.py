@@ -12,8 +12,8 @@ load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 
-EMAIL_SENDER = os.getenv("EMAIL_ADDRESS")   # e.g. onboarding@resend.dev
-RESEND_API_KEY = os.getenv("RESEND_API_KEY")
+EMAIL_SENDER = os.getenv("EMAIL_ADDRESS")  # verified in Brevo
+BREVO_API_KEY = os.getenv("BREVO_API_KEY")
 
 VERIFIED_ROLE = os.getenv("VERIFIED_ROLE")
 ADMIN_LOG_CHANNEL = os.getenv("ADMIN_LOG_CHANNEL")
@@ -29,22 +29,25 @@ tree = app_commands.CommandTree(bot)
 
 otp_store: dict[int, int] = {}
 
-# ---------------- EMAIL VIA RESEND API ---------------- #
+# ---------------- EMAIL VIA BREVO API ---------------- #
 
 def send_otp_via_api(email: str, otp: int):
 
-    url = "https://api.resend.com/emails"
+    url = "https://api.brevo.com/v3/smtp/email"
 
     headers = {
-        "Authorization": f"Bearer {RESEND_API_KEY}",
+        "api-key": BREVO_API_KEY,
         "Content-Type": "application/json",
     }
 
     payload = {
-        "from": EMAIL_SENDER,
-        "to": [email],
+        "sender": {
+            "name": "MindMatrixEd VerifyBot",
+            "email": EMAIL_SENDER,
+        },
+        "to": [{"email": email}],
         "subject": "Discord Verification Code",
-        "html": f"""
+        "htmlContent": f"""
         <h2>Your Discord OTP</h2>
         <p>Your verification code is:</p>
         <h1>{otp}</h1>
@@ -96,7 +99,7 @@ async def verify(interaction: discord.Interaction):
         otp = random.randint(100000, 999999)
         otp_store[interaction.user.id] = otp
 
-        # Run HTTP email send in background thread
+        # Run HTTP call in background thread
         await asyncio.to_thread(send_otp_via_api, email, otp)
 
         await interaction.user.send(
