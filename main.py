@@ -3,10 +3,8 @@ from discord import app_commands
 from dotenv import load_dotenv
 import os
 import random
-import smtplib
-from email.message import EmailMessage
 import asyncio
-from discord.ext import tasks
+import requests
 
 # ---------------- LOAD ENV ---------------- #
 
@@ -14,15 +12,11 @@ load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 
-EMAIL = os.getenv("EMAIL_ADDRESS")
-EMAIL_PASS = os.getenv("EMAIL_PASSWORD")
-SMTP_SERVER = os.getenv("SMTP_SERVER")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+EMAIL_SENDER = os.getenv("EMAIL_ADDRESS")   # e.g. onboarding@resend.dev
+RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 
 VERIFIED_ROLE = os.getenv("VERIFIED_ROLE")
 ADMIN_LOG_CHANNEL = os.getenv("ADMIN_LOG_CHANNEL")
-
-VERIFY_CHANNEL = "verify"
 
 # ---------------- BOT SETUP ---------------- #
 
@@ -35,60 +29,44 @@ tree = app_commands.CommandTree(bot)
 
 otp_store: dict[int, int] = {}
 
-# ---------------- EMAIL FUNCTION ---------------- #
+# ---------------- EMAIL VIA RESEND API ---------------- #
 
-def send_otp(email: str, otp: int):
-    msg = EmailMessage()
-    msg["Subject"] = "Discord Verification Code"
-    msg["From"] = EMAIL
-    msg["To"] = email
+def send_otp_via_api(email: str, otp: int):
 
-    msg.set_content(
-        f"""
-Your Discord verification code is:
+    url = "https://api.resend.com/emails"
 
-{otp}
+    headers = {
+        "Authorization": f"Bearer {RESEND_API_KEY}",
+        "Content-Type": "application/json",
+    }
 
-If you didn’t request this, ignore it.
-"""
+    payload = {
+        "from": EMAIL_SENDER,
+        "to": [email],
+        "subject": "Discord Verification Code",
+        "html": f"""
+        <h2>Your Discord OTP</h2>
+        <p>Your verification code is:</p>
+        <h1>{otp}</h1>
+        <p>If you didn't request this, ignore it.</p>
+        """,
+    }
+
+    response = requests.post(
+        url,
+        headers=headers,
+        json=payload,
+        timeout=10,
     )
 
-    with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=10) as server:
-        server.starttls()
-        server.login(EMAIL, EMAIL_PASS)
-        server.send_message(msg)
+    response.raise_for_status()
 
 # ---------------- READY EVENT ---------------- #
 
 @bot.event
 async def on_ready():
     await tree.sync()
-    cleanup_verify_channel.start()
     print(f"✅ Logged in as {bot.user}")
-
-# ---------------- AUTO CLEAN VERIFY CHANNEL ---------------- #
-
-@tasks.loop(minutes=5)
-async def cleanup_verify_channel():
-    await bot.wait_until_ready()
-
-    for guild in bot.guilds:
-        channel = discord.utils.get(guild.text_channels, name=VERIFY_CHANNEL)
-
-        if not channel:
-            continue
-
-        try:
-            async for msg in channel.history(limit=100):
-                if msg.pinned:
-                    continue
-                await msg.delete()
-
-        except discord.Forbidden:
-            print("❌ Missing permission to delete messages in #verify")
-
-        except Exception as e:
-            print("Cleanup error:", e)
 
 # ---------------- SLASH COMMANDS ---------------- #
 
@@ -118,8 +96,8 @@ async def verify(interaction: discord.Interaction):
         otp = random.randint(100000, 999999)
         otp_store[interaction.user.id] = otp
 
-        # 🔥 Run SMTP in background thread
-        await asyncio.to_thread(send_otp, email, otp)
+        # Run HTTP email send in background thread
+        await asyncio.to_thread(send_otp_via_api, email, otp)
 
         await interaction.user.send(
             "✅ OTP sent! Use `/otp <code>` in the server."
@@ -132,7 +110,7 @@ async def verify(interaction: discord.Interaction):
 
     except Exception as e:
         await interaction.user.send(
-            f"❌ Failed to send email: {e}"
+            f"❌ Failed to send email. Contact admin.\n{e}"
         )
 
 # /otp
@@ -189,8 +167,6 @@ async def otp(interaction: discord.Interaction, code: int):
         "🎉 You are now verified!",
         ephemeral=True,
     )
-
-    # ---- Admin Log ---- #
 
     log_channel = discord.utils.get(
         interaction.guild.text_channels,
