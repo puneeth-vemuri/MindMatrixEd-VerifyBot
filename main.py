@@ -5,6 +5,8 @@ import os
 import random
 import smtplib
 from email.message import EmailMessage
+import asyncio
+from discord.ext import tasks
 
 # ---------------- LOAD ENV ---------------- #
 
@@ -15,10 +17,12 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 EMAIL = os.getenv("EMAIL_ADDRESS")
 EMAIL_PASS = os.getenv("EMAIL_PASSWORD")
 SMTP_SERVER = os.getenv("SMTP_SERVER")
-SMTP_PORT = int(os.getenv("SMTP_PORT"))
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 
 VERIFIED_ROLE = os.getenv("VERIFIED_ROLE")
 ADMIN_LOG_CHANNEL = os.getenv("ADMIN_LOG_CHANNEL")
+
+VERIFY_CHANNEL = "verify"
 
 # ---------------- BOT SETUP ---------------- #
 
@@ -29,15 +33,16 @@ intents.message_content = True
 bot = discord.Client(intents=intents)
 tree = app_commands.CommandTree(bot)
 
-otp_store = {}
+otp_store: dict[int, int] = {}
 
 # ---------------- EMAIL FUNCTION ---------------- #
 
-def send_otp(email, otp):
+def send_otp(email: str, otp: int):
     msg = EmailMessage()
     msg["Subject"] = "Discord Verification Code"
     msg["From"] = EMAIL
     msg["To"] = email
+
     msg.set_content(
         f"""
 Your Discord verification code is:
@@ -48,7 +53,7 @@ If you didn’t request this, ignore it.
 """
     )
 
-    with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+    with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=10) as server:
         server.starttls()
         server.login(EMAIL, EMAIL_PASS)
         server.send_message(msg)
@@ -58,7 +63,32 @@ If you didn’t request this, ignore it.
 @bot.event
 async def on_ready():
     await tree.sync()
+    cleanup_verify_channel.start()
     print(f"✅ Logged in as {bot.user}")
+
+# ---------------- AUTO CLEAN VERIFY CHANNEL ---------------- #
+
+@tasks.loop(minutes=5)
+async def cleanup_verify_channel():
+    await bot.wait_until_ready()
+
+    for guild in bot.guilds:
+        channel = discord.utils.get(guild.text_channels, name=VERIFY_CHANNEL)
+
+        if not channel:
+            continue
+
+        try:
+            async for msg in channel.history(limit=100):
+                if msg.pinned:
+                    continue
+                await msg.delete()
+
+        except discord.Forbidden:
+            print("❌ Missing permission to delete messages in #verify")
+
+        except Exception as e:
+            print("Cleanup error:", e)
 
 # ---------------- SLASH COMMANDS ---------------- #
 
@@ -88,15 +118,21 @@ async def verify(interaction: discord.Interaction):
         otp = random.randint(100000, 999999)
         otp_store[interaction.user.id] = otp
 
-        send_otp(email, otp)
+        # 🔥 Run SMTP in background thread
+        await asyncio.to_thread(send_otp, email, otp)
 
         await interaction.user.send(
             "✅ OTP sent! Use `/otp <code>` in the server."
         )
 
-    except:
+    except asyncio.TimeoutError:
         await interaction.user.send(
             "⏰ Timed out. Run /verify again."
+        )
+
+    except Exception as e:
+        await interaction.user.send(
+            f"❌ Failed to send email: {e}"
         )
 
 # /otp
@@ -106,7 +142,7 @@ async def otp(interaction: discord.Interaction, code: int):
 
     if interaction.guild is None:
         await interaction.response.send_message(
-            "❌ Use this command inside the server.",
+            "❌ Use this inside the server.",
             ephemeral=True,
         )
         return
@@ -124,8 +160,6 @@ async def otp(interaction: discord.Interaction, code: int):
             ephemeral=True,
         )
         return
-
-    # ---- Assign Role ---- #
 
     role = discord.utils.get(
         interaction.guild.roles,
