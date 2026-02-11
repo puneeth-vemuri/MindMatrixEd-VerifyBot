@@ -97,21 +97,37 @@ async def help_command(interaction: discord.Interaction):
         description="Welcome to the Mind Matrix Discord Bot!\n\n**Verification Steps:**",
         color=discord.Color.blue()
     )
-    embed.add_field(name="1️⃣ Step One", value="Use `/verify` to open the email prompt.", inline=False)
-    embed.add_field(name="2️⃣ Step Two", value="Check your email for the 6-digit OTP code.", inline=False)
-    embed.add_field(name="3️⃣ Step Three", value="Use `/otp <code>` to finish verification.", inline=False)
     
-    # Adding a button for quick access
+    embed.add_field(
+        name="1️⃣ Step One", 
+        value="Use `/verify` to open the email prompt right here in the channel.", 
+        inline=False
+    )
+    
+    embed.add_field(
+        name="2️⃣ Step Two", 
+        value="Check your email for the 6-digit OTP code.\n*⚠️ **Note:** If you don't see it, please **check your spam/junk folder**.*", 
+        inline=False
+    )
+    
+    embed.add_field(
+        name="3️⃣ Step Three", 
+        value="Use `/otp <code>` to finish verification and get your role.", 
+        inline=False
+    )
+    
+    # Adding a button for quick access so they don't even have to type /verify
     view = ui.View()
-    button = ui.Button(label="Start Verification", style=discord.ButtonStyle.primary, custom_id="verify_btn")
+    button = ui.Button(label="Start Verification", style=discord.ButtonStyle.primary, emoji="🔐")
     
-    # Simple callback for the button to trigger the same /verify logic
     async def button_callback(btn_interaction):
+        # This triggers the Modal we created in the previous step
         await btn_interaction.response.send_modal(EmailModal())
     
     button.callback = button_callback
     view.add_item(button)
     
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
 
 bot.run(TOKEN)
